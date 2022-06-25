@@ -18,42 +18,96 @@ app.post("/participants", async (req, res) => {
     });
     const vUsrJoi = usrJoi.validate(req.body);
     if (vUsrJoi.error) {
+        console.log(vUsrJoi.error.details);
         res.sendStatus(422);
         return;
     }
     try {
-        const usr = req.body
         await client.connect();
         const chatDB = client.db("chat");
         const chatUsers = chatDB.collection("users");
-        const user = await chatUsers.findOne({ usr });
+        const usr = req.body.name;
+        const user = await chatUsers.findOne({ name: usr });
         if (user) {
             res.sendStatus(409);
-            return;
         } else {
-            let nome = req.body.name;
-            let hora = Date.now();
-            await db.collection("users").insertOne({
-                name: nome, lastStatus: hora
+            const time = Date.now();
+            await chatUsers.insertOne({ usr, time });
+            const chatDB = client.db("chat");
+            const chatMessages = chatDB.collection("messages");
+            await chatMessages.insertOne({
+                name: usr,
+                to: 'Todos',
+                text: 'entra na sala...',
+                type: 'status',
+                time: dayjs().locale('pt-br').format('hh:mm:ss')
             })
-            await db.collection("messages").insertOne({
-                from: nome,
-                to: "Todos",
-                text: "entra na sala...",
-                type: "status",
-                time: dayjs().locale('pt-br').format("hh:mm:ss"),
-            });
             res.sendStatus(201);
-            MongoClient.close(); 8
+            client.close();
         }
     } catch (err) {
-        res.sendStatus(500);
-        MongoClient.close();
         console.log(err);
+        client.close();
+        res.sendStatus(500);
     }
 
 });
 
+app.get("/participants", async (_req, res) => {
+    try {
+        await client.connect();
+        const chatDB = client.db("chat");
+        const chatUsers = chatDB.collection("users");
+        const users = await chatUsers.find({}).toArray();
+        res.status(200).send(users);
+        client.close();
+    } catch (err) {
+        res.send(err).status(500);
+        client.close();
+        console.log(err);
+    }
+});
+
+app.post("/messages", async (req, res) => {
+    const message = req.body;
+    message.from = req.headers.user;
+    message.time = dayjs().locale('pt-br').format('hh:mm:ss');
+    try {
+        await client.connect();
+        const chatDB = client.db("chat");
+        const chatMessages = chatDB.collection("messages");
+        const from = await chatMessages.findOne({ name: message.from });
+        if (!from) {
+            res.sendStatus(422);
+            client.close();
+        } else {
+            await client.connect();
+            const chatDB = client.db("chat");
+            const chatMessages = chatDB.collection("messages");
+            const patern = Joi.object({
+                to: Joi.string().min(1).required(),
+                text: Joi.string().min(1).required(),
+                type: Joi.string().valid('message', 'private_message').required(),
+                from: Joi.string().required(),
+                time: Joi.required()
+            });
+            const validation = patern.validate(message);
+            if (validation.error) {
+                res.sendStatus(422);
+                console.log(validation.error.details);
+                client.close();
+            } else {
+                await chatMessages.insertOne(message);
+                res.sendStatus(201);
+                client.close();
+            }
+        }
+    } catch (err) {
+        console.log(err);
+        res.sendStatus(500);
+        client.close();
+    }
+});
 
 
 

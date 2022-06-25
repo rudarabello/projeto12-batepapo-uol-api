@@ -17,11 +17,11 @@ app.post("/participants", async (req, res) => {
     });
     const vUsrJoi = usrJoi.validate(req.body);
     if (vUsrJoi.error) {
-        
+
         res.sendStatus(422);
         return;
     }
-    
+
     const name = req.body.name;
     try {
         await client.connect();
@@ -29,7 +29,7 @@ app.post("/participants", async (req, res) => {
         const collection = dbParticipants.collection("users");
         const participant = await collection.findOne({ name: name });
         if (participant) {
-            
+
             res.sendStatus(409);
             return;
         } else {
@@ -126,16 +126,65 @@ app.get("/messages", async (req, res) => {
         const userMessages = messages.filter(message => (message.to === user || message.from === user || message.to === "Todos"))
         if (!limit) {
             res.send(userMessages);
-        } else if(userMessages.length < limit) {
-                res.send(userMessages);
-                return;
-            }
+        } else if (userMessages.length < limit) {
+            res.send(userMessages);
+            return;
+        }
     } catch (err) {
         console.log(err);
     }
-})
-
-
-app.listen(5000, () => {
-    console.log("Servidor rodando na porta 5000");
 });
+
+
+app.post("/status", async (req, res) => {
+    const user = req.headers.user;
+    try {
+        await client.connect();
+        const dbParticipants = client.db("chat")
+        const collectionParticipants = dbParticipants.collection("users");
+        const participant = await collectionParticipants.findOne({ name: user });
+
+        if (!participant) {
+            res.sendStatus(404);
+            client.close();
+        } else {
+            await client.connect();
+            const dbParticipants = client.db("chat")
+            const collectionParticipants = dbParticipants.collection("users");
+            collectionParticipants.updateOne({ name: user }, { $set: { lastStatus: Date.now() } });
+            res.sendStatus(200);
+        }
+    } catch (err) {
+        console.log(err);
+        res.sendStatus(500);
+        client.close();
+    }
+});
+
+async function removeParticipants() {
+    try {
+        await client.connect();
+        const chatDB = client.db("chat");
+        const collectionMessages = chatDB.collection("messages");
+        const collectionParticipants = chatDB.collection("users");
+        const lastStatus = await collectionParticipants.find({}).toArray();
+        const downtime = lastStatus.filter(status => ((Date.now() - status.lastStatus) / 1000) >= 15);
+        downtime.forEach(async participant => {
+            await collectionParticipants.deleteOne({ id: participant.id });
+            await collectionMessages.insertOne({
+                from: participant.name,
+                to: 'Todos',
+                text: 'sai da sala...',
+                type: 'status',
+                time: dayjs().locale('pt-br').format('hh:mm:ss')
+            });
+        })
+        return (lastStatus);
+    } catch (err) {
+        console.log(err);
+    }
+};
+
+setInterval(removeParticipants, 15000);
+
+app.listen(5000);

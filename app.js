@@ -21,8 +21,8 @@ app.post("/participants", async (req, res) => {
         res.sendStatus(422);
         return;
     }
+    
     const name = req.body.name;
-    const lastStatus = Date.now();
     try {
         await client.connect();
         const dbParticipants = client.db("chat");
@@ -33,11 +33,13 @@ app.post("/participants", async (req, res) => {
             res.sendStatus(409);
             return;
         } else {
-            const insertedParticipant = await collection.insertOne({ name, lastStatus });
+            let nome = req.body.name;
+            let hora = Date.now();
+            const insertedParticipant = await collection.insertOne({ name: nome, lastStatus: hora });
             const dbMessages = client.db("chat");
             const collectionMessages = dbMessages.collection("messages");
             await collectionMessages.insertOne({
-                name: name,
+                from: nome,
                 to: 'Todos',
                 text: 'entra na sala...',
                 type: 'status',
@@ -75,30 +77,32 @@ app.post("/messages", async (req, res) => {
     message.time = dayjs().locale('pt-br').format('hh:mm:ss');
     try {
         await client.connect();
-        const chatDB = client.db("chat");
-        const chatMessages = chatDB.collection("messages");
-        const from = await chatMessages.findOne({ name: message.from });
+        const dbParticipants = client.db("chat");
+        const collection = dbParticipants.collection("users");
+        const from = await collection.findOne({ name: message.from });
         if (!from) {
             res.sendStatus(422);
             client.close();
+            return;
         } else {
             await client.connect();
-            const chatDB = client.db("chat");
-            const chatMessages = chatDB.collection("messages");
-            const patern = Joi.object({
-                to: Joi.string().min(1).required(),
-                text: Joi.string().min(1).required(),
+            const dbMessages = client.db("chat");
+            const collectionMessages = dbMessages.collection("messages");
+            const messagesModel = Joi.object({
+                to: Joi.string().required(),
+                text: Joi.string().required(),
                 type: Joi.string().valid('message', 'private_message').required(),
                 from: Joi.string().required(),
-                time: Joi.required()
+                time: Joi.optional()
             });
-            const validation = patern.validate(message);
+            const validation = messagesModel.validate(message);
             if (validation.error) {
-                res.sendStatus(422);
+                res.status(422).send("Envie um formato válido");
                 console.log(validation.error.details);
                 client.close();
+                return;
             } else {
-                await chatMessages.insertOne(message);
+                await collectionMessages.insertOne(message);
                 res.sendStatus(201);
                 client.close();
             }
@@ -108,7 +112,8 @@ app.post("/messages", async (req, res) => {
         res.sendStatus(500);
         client.close();
     }
-});
+})
+
 
 app.get("/messages", async (req, res) => {
     const limit = parseInt(req.query.limit);

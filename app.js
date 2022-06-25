@@ -1,4 +1,3 @@
-
 import express from "express";
 import cors from "cors";
 import { MongoClient } from "mongodb";
@@ -18,39 +17,41 @@ app.post("/participants", async (req, res) => {
     });
     const vUsrJoi = usrJoi.validate(req.body);
     if (vUsrJoi.error) {
-        console.log(vUsrJoi.error.details);
+        
         res.sendStatus(422);
         return;
     }
+    const name = req.body.name;
+    const lastStatus = Date.now();
     try {
         await client.connect();
-        const chatDB = client.db("chat");
-        const chatUsers = chatDB.collection("users");
-        const usr = req.body.name;
-        const user = await chatUsers.findOne({ name: usr });
-        if (user) {
+        const dbParticipants = client.db("chat");
+        const collection = dbParticipants.collection("users");
+        const participant = await collection.findOne({ name: name });
+        if (participant) {
+            
             res.sendStatus(409);
+            return;
         } else {
-            const time = Date.now();
-            await chatUsers.insertOne({ usr, time });
-            const chatDB = client.db("chat");
-            const chatMessages = chatDB.collection("messages");
-            await chatMessages.insertOne({
-                name: usr,
+            const insertedParticipant = await collection.insertOne({ name, lastStatus });
+            const dbMessages = client.db("chat");
+            const collectionMessages = dbMessages.collection("messages");
+            await collectionMessages.insertOne({
+                name: name,
                 to: 'Todos',
                 text: 'entra na sala...',
                 type: 'status',
                 time: dayjs().locale('pt-br').format('hh:mm:ss')
             })
+
             res.sendStatus(201);
             client.close();
         }
     } catch (err) {
         console.log(err);
-        client.close();
         res.sendStatus(500);
+        client.close();
     }
-
 });
 
 app.get("/participants", async (_req, res) => {
@@ -109,6 +110,25 @@ app.post("/messages", async (req, res) => {
     }
 });
 
+app.get("/messages", async (req, res) => {
+    const limit = parseInt(req.query.limit);
+    const user = req.headers.user;
+    try {
+        await client.connect();
+        const dbMessages = client.db("chat");
+        const collectionMessages = dbMessages.collection("messages");
+        const messages = await collectionMessages.find({}).toArray();
+        const userMessages = messages.filter(message => (message.to === user || message.from === user || message.to === "Todos"))
+        if (!limit) {
+            res.send(userMessages);
+        } else if(userMessages.length < limit) {
+                res.send(userMessages);
+                return;
+            }
+    } catch (err) {
+        console.log(err);
+    }
+})
 
 
 app.listen(5000, () => {

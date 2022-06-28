@@ -9,65 +9,52 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 app.use(cors());
-const client = new MongoClient(process.env.MONGO_URL);
+const mongoClient = new MongoClient(process.env.MONGO_URL);
 
+let db;
+mongoClient.connect(() => {
+    db = mongoClient.db("chat");
+});
 app.post("/participants", async (req, res) => {
     const usrJoi = Joi.object({
         name: Joi.string().min(1).required(),
     });
     const vUsrJoi = usrJoi.validate(req.body);
     if (vUsrJoi.error) {
-
         res.sendStatus(422);
         return;
     }
-
     const name = req.body.name;
     try {
-        await client.connect();
-        const dbParticipants = client.db("chat");
-        const collection = dbParticipants.collection("users");
-        const participant = await collection.findOne({ name: name });
+        const participant = await db.collection("users").findOne({ name: name });
         if (participant) {
-
             res.sendStatus(409);
             return;
         } else {
             let nome = req.body.name;
             let hora = Date.now();
-            const insertedParticipant = await collection.insertOne({ name: nome, lastStatus: hora });
-            const dbMessages = client.db("chat");
-            const collectionMessages = dbMessages.collection("messages");
-            await collectionMessages.insertOne({
+            await db.collection("users").insertOne({ name: nome, lastStatus: hora });
+            await db.collection("messages").insertOne({
                 from: nome,
                 to: 'Todos',
                 text: 'entra na sala...',
                 type: 'status',
                 time: dayjs().locale('pt-br').format('hh:mm:ss')
             })
-
             res.sendStatus(201);
-            client.close();
         }
     } catch (err) {
         console.log(err);
         res.sendStatus(500);
-        client.close();
     }
 });
 
 app.get("/participants", async (_req, res) => {
     try {
-        await client.connect();
-        const chatDB = client.db("chat");
-        const chatUsers = chatDB.collection("users");
-        const users = await chatUsers.find({}).toArray();
+        const users = await db.collection("users").find({}).toArray();
         res.status(200).send(users);
-        client.close();
     } catch (err) {
         res.send(err).status(500);
-        client.close();
-        console.log(err);
     }
 });
 
@@ -76,22 +63,19 @@ app.post("/messages", async (req, res) => {
     message.from = req.headers.user;
     message.time = dayjs().locale('pt-br').format('hh:mm:ss');
     try {
-        await client.connect();
-        const dbParticipants = client.db("chat");
-        const collection = dbParticipants.collection("users");
-        const from = await collection.findOne({ name: message.from });
+        const from = await db.collection("users").findOne({
+            name: message.from
+        });
         if (!from) {
             res.sendStatus(422);
-            client.close();
             return;
         } else {
-            await client.connect();
-            const dbMessages = client.db("chat");
-            const collectionMessages = dbMessages.collection("messages");
+            const collectionMessages = await db.collection("messages");
             const messagesModel = Joi.object({
                 to: Joi.string().required(),
                 text: Joi.string().required(),
-                type: Joi.string().valid('message', 'private_message').required(),
+                type: Joi.string().valid('message',
+                    'private_message').required(),
                 from: Joi.string().required(),
                 time: Joi.optional()
             });
@@ -99,35 +83,31 @@ app.post("/messages", async (req, res) => {
             if (validation.error) {
                 res.status(422).send("Envie um formato válido");
                 console.log(validation.error.details);
-                client.close();
                 return;
             } else {
                 await collectionMessages.insertOne(message);
                 res.sendStatus(201);
-                client.close();
             }
         }
     } catch (err) {
         console.log(err);
         res.sendStatus(500);
-        client.close();
     }
 })
-
 
 app.get("/messages", async (req, res) => {
     const limit = parseInt(req.query.limit);
     const user = req.headers.user;
     try {
-        await client.connect();
-        const dbMessages = client.db("chat");
-        const collectionMessages = dbMessages.collection("messages");
-        const messages = await collectionMessages.find({}).toArray();
+        const messages = await db.collection("messages").find({}).toArray();
         const userMessages = messages.filter(message => (message.to === user || message.from === user || message.to === "Todos"))
         if (!limit) {
             res.send(userMessages);
         } else if (userMessages.length < limit) {
             res.send(userMessages);
+        } else {
+            const showMessages = await userMessages.splice(-{ limit });
+            res.send(showMessages);
             return;
         }
     } catch (err) {
@@ -135,56 +115,39 @@ app.get("/messages", async (req, res) => {
     }
 });
 
-
 app.post("/status", async (req, res) => {
     const user = req.headers.user;
     try {
-        await client.connect();
-        const dbParticipants = client.db("chat")
-        const collectionParticipants = dbParticipants.collection("users");
-        const participant = await collectionParticipants.findOne({ name: user });
-
+        const participant = await db.collection("users").findOne({ name: user });
         if (!participant) {
             res.sendStatus(404);
-            client.close();
         } else {
-            await client.connect();
-            const dbParticipants = client.db("chat")
-            const collectionParticipants = dbParticipants.collection("users");
-            collectionParticipants.updateOne({ name: user }, { $set: { lastStatus: Date.now() } });
+            await db.collection("users").updateOne({ name: user }, { $set: { lastStatus: Date.now() } });
             res.sendStatus(200);
         }
     } catch (err) {
-        console.log(err);
         res.sendStatus(500);
-        client.close();
     }
 });
 
-async function removeParticipants() {
-    try {
-        await client.connect();
-        const chatDB = client.db("chat");
-        const collectionMessages = chatDB.collection("messages");
-        const collectionParticipants = chatDB.collection("users");
-        const lastStatus = await collectionParticipants.find({}).toArray();
-        const downtime = lastStatus.filter(status => ((Date.now() - status.lastStatus) / 1000) >= 15);
-        downtime.forEach(async participant => {
-            await collectionParticipants.deleteOne({ id: participant.id });
-            await collectionMessages.insertOne({
-                from: participant.name,
-                to: 'Todos',
-                text: 'sai da sala...',
-                type: 'status',
-                time: dayjs().locale('pt-br').format('hh:mm:ss')
-            });
-        })
-        return (lastStatus);
-    } catch (err) {
-        console.log(err);
+setInterval(async () => {
+    const now = Date.now() - 10000;
+    const deleted = await db
+        .collection("users")
+        .find({ lastStatus: { $lt: now - 10000 } })
+        .toArray();
+    if (deleted.length > 0) {
+        await db.collection("messages").insertMany(
+            deleted.map((user) => ({
+                from: user.name,
+                to: "Todos",
+                text: "sai da sala...",
+                type: "status",
+                time: dayjs(now).format("HH:mm:ss"),
+            }))
+        );
+        await db.collection("users").deleteMany({ lastStatus: { $lte: now } });
     }
-};
-
-setInterval(removeParticipants, 15000);
+}, 15000);
 
 app.listen(5000);
